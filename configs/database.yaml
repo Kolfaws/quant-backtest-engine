@@ -1,0 +1,34 @@
+# =============================================================================
+# database.yaml — backtest_engine 的连接配置
+#
+# 设计：
+#   - market.duckdb 以 read_only=True 打开（data_pipeline / factor 在写）；
+#   - backtest.duckdb 以读写方式打开（只有 backtest_engine 建表、写净值）；
+#   - 路径只从环境变量 / .env 读取，不在 YAML 中写死机器路径：
+#       MARKET_DB_PATH / BACKTEST_DB_PATH
+# =============================================================================
+
+version: 1
+
+# 环境变量 BACKTEST_DB_PROFILE 优先于此处
+active_profile: production
+
+profiles:
+  production:
+    market_db_path: "${MARKET_DB_PATH}"
+    backtest_db_path: "${BACKTEST_DB_PATH}"
+    market_read_only: true
+    threads: 6
+    memory_limit: 6GB
+    temp_dir: null
+
+  research:
+    market_db_path: "${MARKET_DB_PATH}"
+    backtest_db_path: "${BACKTEST_DB_PATH}"
+    market_read_only: true
+    threads: 4
+    memory_limit: 4GB
+    temp_dir: null
+
+session:
+  timezone: Asia/Shanghai

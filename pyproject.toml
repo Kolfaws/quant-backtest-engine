@@ -1,0 +1,36 @@
+[project]
+name = "quant-backtest-engine"
+version = "0.1.0"
+description = "Backtest storage and net-value engine for the Quant stack."
+authors = [
+    { name = "Kalofaws" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "duckdb>=2.0.0",
+    "numpy>=2.5.4",
+    "polars>=2.1.0",
+    "pre-commit>=4.7.0",
+    "pyarrow>=26.0.1",
+    "pytz>=2026.6",
+    "pyyaml>=6.0.3",
+    "quant-baseline",
+    "quant-data-pipeline",
+    "quant-db-schema",
+    "scipy>=1.18.1",
+]
+
+[project.scripts]
+quant-backtest-engine = "backtest_engine:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "backtest_engine"
+
+[tool.uv.sources]
+quant-db-schema = { path = "../quant-db-schema", editable = true }
+quant-data-pipeline = { path = "../quant-data-pipeline", editable = true }
+quant-baseline = { path = "../quant-baseline", editable = true }

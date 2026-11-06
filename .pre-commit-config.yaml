@@ -1,0 +1,56 @@
+# =============================================================================
+# .pre-commit-config.yaml — 提交前自动检查
+#
+# 安装：pre-commit install
+# 手动全量跑：pre-commit run --all-files
+# 说明：ruff 版本需与 pyproject.toml 的 ruff 一致，避免格式化结果抖动。
+# =============================================================================
+
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # 1. 基础文件检查
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+        args: ["--allow-multiple-documents"]
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: ["--markdown-linebreak-ext=md"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: detect-private-key
+      # 保护主分支：防止直接 push 到 main / master
+      - id: no-commit-to-branch
+        args: ["--branch", "main", "--branch", "master"]
+
+  # 2. 代码风格与格式化（与 pyproject.toml [tool.ruff] 保持一致）
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.1
+    hooks:
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      - id: ruff-format
+
+  # 3. 拼写检查（针对注释与文档）
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.3.0
+    hooks:
+      - id: codespell
+        args: ["--ignore-words-list=ba,hist,nd"]
+        exclude: ^(.*\.ipynb|.*\.csv|.*\.svg|.*\.lock)$
+
+  # 4. Notebook 输出清理（保持仓库体积可控）
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.7.1
+    hooks:
+      - id: nbstripout
+        files: \.ipynb$
