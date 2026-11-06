@@ -2,23 +2,12 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import init_backtest_db as init
 import polars as pl
 import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-for candidate in (
-    PROJECT_ROOT / "src",
-    PROJECT_ROOT / "scripts",
-    PROJECT_ROOT.parent / "quant-db-schema" / "src",
-):
-    if str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
-
-import init_backtest_db as init
 
 from backtest_engine.engine.metrics import (
     annualized_volatility,

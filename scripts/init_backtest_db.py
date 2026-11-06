@@ -25,25 +25,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Final
 
-
-# --- quant_schema 未安装时，从同级目录兜底 -----------------------------------
-def _ensure_quant_schema_on_path() -> None:
-    try:  # pragma: no cover
-        import quant_schema  # noqa: F401
-
-        return
-    except ModuleNotFoundError:
-        pass
-    for candidate in (
-        Path(__file__).resolve().parents[2] / "quant-db-schema" / "src",
-        Path(__file__).resolve().parent.parent / "quant-db-schema" / "src",
-    ):
-        if (candidate / "quant_schema" / "__init__.py").is_file():
-            sys.path.insert(0, str(candidate))
-            return
-
-
-_ensure_quant_schema_on_path()
+import duckdb
+from quant_schema._ddl import Table, normalise_type
+from quant_schema.backtest_ddl import BACKTEST_TABLES, BACKTEST_VIEWS
+from quant_schema.constants import BACKTEST_COMPONENT, BACKTEST_SCHEMA_VERSION
 
 
 def _load_dotenv() -> None:
@@ -60,11 +45,6 @@ def _load_dotenv() -> None:
 
 
 _load_dotenv()
-
-import duckdb
-from quant_schema._ddl import Table, normalise_type
-from quant_schema.backtest_ddl import BACKTEST_TABLES, BACKTEST_VIEWS
-from quant_schema.constants import BACKTEST_COMPONENT, BACKTEST_SCHEMA_VERSION
 
 LOG = logging.getLogger("init_backtest_db")
 SCHEMA_VERSION: Final[str] = BACKTEST_SCHEMA_VERSION

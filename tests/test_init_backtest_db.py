@@ -2,21 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-for candidate in (
-    PROJECT_ROOT / "src",
-    PROJECT_ROOT / "scripts",
-    PROJECT_ROOT.parent / "quant-db-schema" / "src",
-):
-    if str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
-
 import init_backtest_db as init
+import pytest
 from quant_schema.constants import BACKTEST_TABLES, BACKTEST_VIEWS
 
 

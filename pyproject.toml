@@ -12,6 +12,7 @@ dependencies = [
     "polars>=2.1.0",
     "pre-commit>=4.7.0",
     "pyarrow>=26.0.1",
+    "pytest>=9.2.0",
     "pytz>=2026.6",
     "pyyaml>=6.0.3",
     "quant-baseline",
@@ -29,6 +30,14 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "backtest_engine"
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "scripts"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.pyright]
+extraPaths = ["src", "scripts"]
 
 [tool.uv.sources]
 quant-db-schema = { path = "../quant-db-schema", editable = true }

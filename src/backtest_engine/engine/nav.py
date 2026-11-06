@@ -185,7 +185,7 @@ def _load_benchmark(
     return {row[0]: float(row[1]) for row in rows if row[1] is not None}
 
 
-def compute_metrics(con, run_id: str) -> dict[str, float | None]:
+def compute_metrics(con, run_id: str) -> dict[str, float]:
     """计算并物化绩效指标；基准存在时同时算超额、跟踪误差、信息比率、beta。"""
     dates, navs, rets = _load_nav(con, run_id)
     if not dates:
