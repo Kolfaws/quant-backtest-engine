@@ -22,6 +22,13 @@ import polars as pl
 TRADING_DAYS: Final[int] = 252
 
 
+def _to_float(value: object) -> float:
+    """把 Polars 数值聚合结果安全转成 float。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"期望数值，实际为 {type(value).__name__}")
+    return float(value)
+
+
 def _as_series(
     values: Sequence[float | None] | pl.Series, name: str = "value"
 ) -> pl.Series:
@@ -39,7 +46,7 @@ def total_return(returns: Sequence[float | None] | pl.Series) -> float | None:
     series = _as_series(returns)
     if series.is_empty():
         return None
-    return float((1.0 + series).product() - 1.0)
+    return _to_float((1.0 + series).product()) - 1.0
 
 
 def annualized_return(
@@ -48,7 +55,7 @@ def annualized_return(
     series = _as_series(returns)
     if series.is_empty():
         return None
-    gross = float((1.0 + series).product())
+    gross = _to_float((1.0 + series).product())
     if gross <= 0:
         return -1.0
     return gross ** (periods / series.len()) - 1.0
@@ -60,7 +67,7 @@ def annualized_volatility(
     series = _as_series(returns)
     if series.len() < 2:
         return None
-    return float(series.std(ddof=1)) * math.sqrt(periods)
+    return _to_float(series.std(ddof=1)) * math.sqrt(periods)
 
 
 def sharpe_ratio(
@@ -69,10 +76,10 @@ def sharpe_ratio(
     series = _as_series(returns)
     if series.len() < 2:
         return None
-    std = float(series.std(ddof=1))
+    std = _to_float(series.std(ddof=1))
     if std == 0:
         return None
-    return float(series.mean()) / std * math.sqrt(periods)
+    return _to_float(series.mean()) / std * math.sqrt(periods)
 
 
 def max_drawdown(navs: Sequence[float | None] | pl.Series) -> float | None:
@@ -81,7 +88,7 @@ def max_drawdown(navs: Sequence[float | None] | pl.Series) -> float | None:
     if series.is_empty():
         return None
     drawdown = series / series.cum_max() - 1.0
-    return float(drawdown.min())
+    return _to_float(drawdown.min())
 
 
 def calmar_ratio(
@@ -101,7 +108,7 @@ def win_rate(returns: Sequence[float | None] | pl.Series) -> float | None:
     active = series.filter(series != 0)
     if active.is_empty():
         return None
-    return float((active > 0).sum()) / active.len()
+    return _to_float((active > 0).sum()) / active.len()
 
 
 def beta(
@@ -148,10 +155,10 @@ def information_ratio(
     series = _as_series(active_returns)
     if series.len() < 2:
         return None
-    te = float(series.std(ddof=1)) * math.sqrt(periods)
-    if te == 0:
+    tracking_error_value = _to_float(series.std(ddof=1)) * math.sqrt(periods)
+    if tracking_error_value == 0:
         return None
-    return float(series.mean()) * periods / te
+    return _to_float(series.mean()) * periods / tracking_error_value
 
 
 def summarize(
@@ -200,9 +207,7 @@ def summarize(
             "benchmark_total_return": total_return(benchmark_series),
             "excess_total_return": (total_return(strategy_series) or 0.0)
             - (total_return(benchmark_series) or 0.0),
-            "excess_annualized_return": (
-                annualized_return(strategy_series) or 0.0
-            )
+            "excess_annualized_return": (annualized_return(strategy_series) or 0.0)
             - (annualized_return(benchmark_series) or 0.0),
             "tracking_error": tracking_error(active_series),
             "information_ratio": information_ratio(active_series),

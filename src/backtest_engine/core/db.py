@@ -10,22 +10,13 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
 
 import duckdb
-
-try:  # uv add --editable ../quant-data-pipeline 后可直接导入
-    from data_pipeline.db import connect as _duckdb_connect
-except ModuleNotFoundError:  # pragma: no cover - 同仓库开发时的兜底
-    _candidate = Path(__file__).resolve().parents[4] / "quant-data-pipeline" / "src"
-    if str(_candidate) not in sys.path:
-        sys.path.insert(0, str(_candidate))
-    from data_pipeline.db import connect as _duckdb_connect
-
+from data_pipeline.db import connect as _duckdb_connect
 from quant_schema.constants import BACKTEST_COMPONENT, BACKTEST_TABLES
 
 from .config import ProfileConfig

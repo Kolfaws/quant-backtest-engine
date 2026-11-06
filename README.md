@@ -51,6 +51,7 @@ uv add --editable ../quant-db-schema
 uv add --editable ../quant-data-pipeline
 uv add --editable ../quant-baseline
 uv add duckdb polars pyarrow pytz pyyaml numpy scipy
+uv sync
 
 # 1) 建表（幂等；会写入 component='backtest' 的版本行）
 uv run python scripts/init_backtest_db.py init
@@ -73,6 +74,10 @@ trade_date,ret_1d
 2024-01-02,0.0
 2024-01-03,0.0123
 ```
+
+本项目采用 `src/` 布局，`uv sync` 会以 editable 方式安装 `backtest_engine`；
+测试通过 `pyproject.toml` 的 `pythonpath = ["src", "scripts"]` 解析包和脚本，
+不使用 `sys.path.insert`。
 
 ## 4. 数据表
 

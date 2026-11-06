@@ -24,14 +24,6 @@ from pathlib import Path
 
 import polars as pl
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-for candidate in (
-    PROJECT_ROOT / "src",
-    PROJECT_ROOT.parent / "quant-db-schema" / "src",
-):
-    if str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
-
 from backtest_engine.core.config import load_profile
 from backtest_engine.core.db import (
     backtest_connection,
