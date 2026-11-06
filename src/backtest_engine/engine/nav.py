@@ -4,7 +4,7 @@
 
 * ``bt_nav`` 是**唯一**由 backtest_engine 写的行情型表，主键 ``(run_id, trade_date)``；
 * ``nav`` 为策略归一净值（首个交易日通常为 1.0）；
-* 超额的权威计算在 ``v_bt_nav_excess`` 视图里，本模块只负责把指标物化到
+* 超额计算在 ``v_bt_nav_excess`` 视图里，本模块只负责把指标物化到
   ``bt_run_metrics``。
 """
 

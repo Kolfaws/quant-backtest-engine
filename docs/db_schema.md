@@ -1,4 +1,4 @@
-# backtest.duckdb — 表结构（权威）
+# backtest.duckdb — 表结构
 
 > **DDL 唯一来源**：`quant-db-schema/src/quant_schema/backtest_ddl.py`  
 > **建表/校验唯一入口**：`scripts/init_backtest_db.py`  

@@ -55,6 +55,11 @@ VIEWS: Final[dict[str, str]] = BACKTEST_VIEWS
 DEFAULT_DB_PATH: Final[Path] = Path(
     os.getenv("BACKTEST_DB_PATH", "data/backtest.duckdb")
 )
+TEST_DB_PATH: Final[Path | None] = (
+    Path(os.environ["BACKTEST_TEST_DB_PATH"])
+    if os.getenv("BACKTEST_TEST_DB_PATH")
+    else None
+)
 DEFAULT_THREADS: Final[int] = 6
 DEFAULT_MEMORY_LIMIT: Final[str] = "6GB"
 
@@ -291,7 +296,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="backtest.duckdb 结构初始化（backtest 组件）",
     )
     parser.add_argument("command", nargs="?", default="init", choices=("init", "check"))
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+    parser.add_argument("--db", type=Path, default=None)
+    parser.add_argument("--env", choices=("prod", "test"), default="prod")
     parser.add_argument("--threads", type=int, default=DEFAULT_THREADS)
     parser.add_argument(
         "--memory-limit", dest="memory_limit", default=DEFAULT_MEMORY_LIMIT
@@ -316,10 +322,19 @@ def _setup_logging(level: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.db is not None:
+        db_path = args.db
+    elif args.env == "test":
+        if TEST_DB_PATH is None:
+            LOG.error("未配置 BACKTEST_TEST_DB_PATH")
+            return 2
+        db_path = TEST_DB_PATH
+    else:
+        db_path = DEFAULT_DB_PATH
     _setup_logging(args.log_level)
     try:
         with database(
-            args.db,
+            db_path,
             threads=args.threads,
             memory_limit=args.memory_limit,
             temp_dir=args.temp_dir,
@@ -332,7 +347,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             LOG.info(
                 "%s 完成  db=%s  component=%s  version=%s",
                 "校验" if args.command == "check" else "初始化",
-                args.db,
+                db_path,
                 COMPONENT,
                 installed_version(con) or "-",
             )

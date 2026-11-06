@@ -25,7 +25,7 @@ backtest.duckdb    ← 本项目建表；quant-baseline 写基准；本项目写
 ```text
 quant-backtest-engine/
 ├── configs/database.yaml          # market / backtest 路径与资源
-├── docs/db_schema.md              # 表结构权威文档
+├── docs/db_schema.md              # 表结构文档
 ├── scripts/
 │   ├── init_backtest_db.py        # init / check，单事务 + 校验 + 版本行
 │   ├── run_nav.py                 # 收益 CSV -> bt_runs / bt_nav / bt_run_metrics
@@ -66,6 +66,23 @@ uv run python scripts/demo_run.py --run-id demo_eqw --benchmark-id BI_EQW_CORE
 uv run python scripts/run_nav.py --run-id my_run --strategy-id mom \
     --returns outputs/mom_returns.csv --benchmark-id BI_HS300
 ```
+
+### 测试库
+
+```bash
+# 初始化并复制正式基准
+uv run python scripts/init_test_db.py
+uv run python scripts/sync_test_backtest.py --apply
+
+# 用 test profile 生成测试 run
+uv run python scripts/demo_run.py --profile test --run-id demo_test --benchmark-id BI_EQW_CORE
+
+# 验证通过后发布（默认 dry-run）
+uv run python scripts/promote_test_run.py --run-id demo_test
+uv run python scripts/promote_test_run.py --run-id demo_test --apply
+```
+
+测试库路径来自 `BACKTEST_TEST_DB_PATH`；正式库与测试库路径不能相同。
 
 `run_nav.py` 的 CSV 至少包含：
 

@@ -30,5 +30,13 @@ profiles:
     memory_limit: 4GB
     temp_dir: null
 
+  test:
+    market_db_path: "${MARKET_TEST_DB_PATH}"
+    backtest_db_path: "${BACKTEST_TEST_DB_PATH}"
+    market_read_only: true
+    threads: 4
+    memory_limit: 4GB
+    temp_dir: null
+
 session:
   timezone: Asia/Shanghai
