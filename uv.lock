@@ -734,6 +734,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pytz" },
     { name = "quant-db-schema" },
+    { name = "six" },
     { name = "tushare" },
 ]
 
@@ -745,6 +746,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=26.0.1" },
     { name = "pytz", specifier = ">=2026.6" },
     { name = "quant-db-schema", editable = "../quant-db-schema" },
+    { name = "six", specifier = ">=1.16.0" },
     { name = "tushare", specifier = ">=1.4.29" },
 ]
 
@@ -910,6 +912,15 @@ wheels = [
     { url = "https://mirrors.cloud.tencent.com/pypi/packages/9c/d4/6a4ea83d95d7136ad0086fa77775a738dbff5aa87ecb2bbf133c788abb65/simplejson-4.2.0-cp315-cp315t-win32.whl", hash = "sha256:f28ea5dad3252956504d49c08eda5db8a6e069e5bf5b3d3a4fa948b4ca45457f" },
     { url = "https://mirrors.cloud.tencent.com/pypi/packages/fc/72/e9f53d02a0dad0bd0f8ac84a25c7e14aff23d80ccc460999e85f5fdabc2d/simplejson-4.2.0-cp315-cp315t-win_amd64.whl", hash = "sha256:ac7cb2c7cdcd1db6a85444c5dd7fb5aff0b09079f8b51cbe8c2349cd474cd903" },
     { url = "https://mirrors.cloud.tencent.com/pypi/packages/e9/4c/9acdf4ae4f41c09a09ad17427e5ee912f35aa56ea1d1723a9d927d659d4e/simplejson-4.2.0-py3-none-any.whl", hash = "sha256:c2a2e5f43287cbe3413f7b73b04d5a6f75c7bd93d783e628f5978853a2ef738d" },
+]
+
+[[package]]
+name = "six"
+version = "1.17.0"
+source = { registry = "https://mirrors.cloud.tencent.com/pypi/simple" }
+sdist = { url = "https://mirrors.cloud.tencent.com/pypi/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81" }
+wheels = [
+    { url = "https://mirrors.cloud.tencent.com/pypi/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274" },
 ]
 
 [[package]]

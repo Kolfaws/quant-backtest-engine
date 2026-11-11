@@ -1,0 +1,42 @@
+# =============================================================================
+# 执行/成本配置（固定值版）
+#
+# 当前 ExecutionModel 只实现：
+#   - 固定 bps 滑点；
+#   - 佣金（含最低佣金）、印花税（仅卖出）、过户费；
+#   - 涨跌停/停牌/ST/最大参与率/整手约束。
+#
+# 未来动态实现：把 slippage.mode / constraints.mode 换成注册表中的新名称，
+# 并在 params 里传参数；不需要改 ExecutionModel 或 YAML 结构。
+# =============================================================================
+
+version: 1
+
+execution:
+  # next_open / next_close / next_vwap；实际价格由调用方按此选择 reference_price
+  price: next_vwap
+  lag_days: 1
+  lot_size: 100
+
+fees:
+  # bps = 万分之一；commission_bps 为单边佣金
+  commission_bps: 2.0
+  min_commission: 5.0
+  # 仅卖出收取；按当前政策可自行调整
+  stamp_tax_bps: 10.0
+  transfer_fee_bps: 0.0
+
+slippage:
+  mode: fixed
+  bps: 5.0
+  # 动态策略预留参数；fixed 模式忽略
+  params: {}
+
+constraints:
+  mode: fixed
+  allow_limit_up_buy: false
+  allow_limit_down_sell: false
+  allow_suspension_trade: false
+  allow_st_trade: true
+  max_participation_rate: 0.1
+  params: {}
