@@ -25,6 +25,7 @@ backtest.duckdb    ← 本项目建表；quant-baseline 写基准；本项目写
 ```text
 quant-backtest-engine/
 ├── configs/database.yaml          # market / backtest 路径与资源
+├── configs/execution.yaml         # 手续费 / 滑点 / 成交约束
 ├── docs/db_schema.md              # 表结构文档
 ├── scripts/
 │   ├── init_backtest_db.py        # init / check，单事务 + 校验 + 版本行
@@ -32,6 +33,7 @@ quant-backtest-engine/
 │   └── demo_run.py                # 端到端 smoke test（只读 market，写 backtest）
 ├── src/backtest_engine/           # Python 包名保持 backtest_engine
 │   ├── core/config.py             # 配置加载
+│   ├── core/execution.py          # ExecutionConfig / 固定滑点与成交约束
 │   ├── core/db.py                 # market 只读 / backtest 读写 / ATTACH
 │   └── engine/
 │       ├── nav.py                 # 登记运行、写净值、算指标
@@ -63,9 +65,13 @@ uv run python scripts/init_backtest_db.py check
 uv run python scripts/demo_run.py --run-id demo_eqw --benchmark-id BI_EQW_CORE
 
 # 4) 任意策略日收益 CSV 入库
-uv run python scripts/run_nav.py --run-id my_run --strategy-id mom \
-    --returns outputs/mom_returns.csv --benchmark-id BI_HS300
+uv run python scripts/run_nav.py --run-id my_run --strategy-id mom `
+    --returns outputs/mom_returns.csv --benchmark-id BI_HS300 `
+    --execution-config configs/execution.yaml
 ```
+
+`--execution-config` 会把配置校验后的摘要写入 `bt_runs.cost_model`；
+`run_nav.py` 仍是“收益 -> 净值”模式，不会凭空生成成交价或成交记录。
 
 ### 测试库
 
@@ -129,7 +135,70 @@ JOIN bt_baselines b
 WHERE n.run_id = 'demo_eqw';
 ```
 
-## 6. 测试
+## 6. 执行成本与成交约束
+
+[configs/execution.yaml](configs/execution.yaml) 当前提供固定值：
+
+```yaml
+fees:
+  commission_bps: 2.0
+  min_commission: 5.0
+  stamp_tax_bps: 10.0       # 仅卖出
+  transfer_fee_bps: 0.0
+slippage:
+  mode: fixed
+  bps: 5.0
+constraints:
+  mode: fixed
+  allow_limit_up_buy: false
+  allow_limit_down_sell: false
+  allow_suspension_trade: false
+  allow_st_trade: true
+  max_participation_rate: 0.1
+```
+
+`ExecutionModel` 负责：
+
+- 整手：`quantity // lot_size * lot_size`；
+- 滑点：买入上浮 `bps`，卖出下调 `bps`；
+- 费用：佣金 `max(notional * commission_bps/10000, min_commission)`，
+  卖出加印花税，过户费可选；
+- 约束：涨停不可买、跌停不可卖、停牌不可成交、ST 开关、最大参与率。
+
+### 动态扩展
+
+`slippage.mode` / `constraints.mode` 走注册表：
+
+```python
+from backtest_engine.core.execution import (
+    SlippageConfig,
+    register_slippage_policy,
+)
+
+@register_slippage_policy("volume_impact")
+def build_slippage(config: SlippageConfig):
+    class Policy:
+        def bps(self, order):
+            # 这里可以读盘口/成交量/波动率，返回动态 bps
+            return 5.0
+    return Policy()
+```
+
+然后在 YAML 中：
+
+```yaml
+slippage:
+  mode: volume_impact
+  bps: 5.0
+  params: {}
+```
+
+未来只需新增注册函数 + 改 YAML，不需要改 `ExecutionModel`。
+
+> 注意：当前 `run_nav.py` 仍是收益入库器，`ExecutionModel` 尚未接入
+> 订单/持仓级撮合；真正扣费需要下一步接 `bt_trades` 与持仓模拟。
+
+## 7. 测试
 
 ```bash
 uv run --with pytest pytest tests -q

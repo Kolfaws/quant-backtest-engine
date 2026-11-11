@@ -29,6 +29,7 @@ from backtest_engine.core.db import (
     backtest_connection,
     require_backtest_schema,
 )
+from backtest_engine.core.execution import load_execution_config
 from backtest_engine.engine.nav import (
     RunSpec,
     compute_metrics,
@@ -50,6 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", default=None)
     parser.add_argument("--initial-capital", type=float, default=1_000_000.0)
     parser.add_argument("--cost-model", default=None)
+    parser.add_argument(
+        "--execution-config",
+        type=Path,
+        default=None,
+        help="执行配置 YAML（configs/execution.yaml）；只做校验/审计记录",
+    )
     parser.add_argument(
         "--log-level", default="INFO", choices=("DEBUG", "INFO", "WARNING", "ERROR")
     )
@@ -86,6 +93,14 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("收益文件为空")
         start = returns["trade_date"].min()
         end = returns["trade_date"].max()
+        execution = (
+            load_execution_config(args.execution_config)
+            if args.execution_config is not None
+            else None
+        )
+        cost_model = execution.summary() if execution is not None else args.cost_model
+        if execution is not None:
+            LOG.info("execution config: %s", cost_model)
 
         spec = RunSpec(
             run_id=args.run_id,
@@ -95,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             start_date=start if isinstance(start, date) else None,
             end_date=end if isinstance(end, date) else None,
             initial_capital=args.initial_capital,
-            cost_model=args.cost_model,
+            cost_model=cost_model,
         )
 
         with backtest_connection(profile) as con:
