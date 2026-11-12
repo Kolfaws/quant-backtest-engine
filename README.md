@@ -26,6 +26,7 @@ backtest.duckdb    ← 本项目建表；quant-baseline 写基准；本项目写
 quant-backtest-engine/
 ├── configs/database.yaml          # market / backtest 路径与资源
 ├── configs/execution.yaml         # 手续费 / 滑点 / 成交约束
+├── docs/README.md                 # 按需阅读索引
 ├── docs/db_schema.md              # 表结构文档
 ├── scripts/
 │   ├── init_backtest_db.py        # init / check，单事务 + 校验 + 版本行
@@ -115,7 +116,8 @@ trade_date,ret_1d
 | `bt_baseline_weights` | quant-baseline | `(benchmark_id, trade_date, symbol)` | 合成基准权重 |
 | `bt_compute_log` | quant-baseline | `run_id` | 基准计算批次日志 |
 
-字段、视图与写入约定见 [docs/db_schema.md](docs/db_schema.md)。
+字段、视图与写入约定见 [docs/db_schema.md](docs/db_schema.md)；按需阅读索引见
+[docs/README.md](docs/README.md)。
 
 ## 5. 并发与跨库
 
