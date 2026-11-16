@@ -1,5 +1,11 @@
 # quant-backtest-engine
 
+## Overview
+
+Quant Backtest Engine is the owner of backtest.duckdb and the NAV/metrics writer for the Quant stack.
+It ingests a daily returns CSV, records runs and performance metrics, and exposes benchmark-relative results for analytics.
+It does not fetch market data, build benchmarks, or perform order-level trade simulation.
+
 回测库（`backtest.duckdb`）的**建表方**与净值/绩效计算组件。
 
 - 项目/文件夹：`quant-backtest-engine`
