@@ -103,12 +103,22 @@ def main(argv: list[str] | None = None) -> int:
                 end_date=returns["trade_date"][-1],
                 params_json='{"symbols": "5 core", "rebalance": "daily"}',
             )
-            register_run(con, spec)
+            # 与 run_nav.py 一致：登记 + 净值 + 指标三写同事务。
+            con.execute("BEGIN TRANSACTION")
             try:
+                register_run(con, spec)
                 write_nav(con, args.run_id, returns, benchmark_id=args.benchmark_id)
                 metrics = compute_metrics(con, args.run_id)
+                con.execute("COMMIT")
             except Exception as exc:
-                mark_run_failed(con, args.run_id, str(exc))
+                try:
+                    con.execute("ROLLBACK")
+                except Exception:
+                    LOG.debug("回滚失败（事务可能已结束）", exc_info=True)
+                try:
+                    mark_run_failed(con, args.run_id, str(exc), spec=spec)
+                except Exception:
+                    LOG.exception("记录 failed 状态失败 run_id=%s", args.run_id)
                 raise
             LOG.info(
                 "demo 完成 run_id=%s total=%.4f annual=%.4f sharpe=%.3f mdd=%.4f excess=%.4f",
