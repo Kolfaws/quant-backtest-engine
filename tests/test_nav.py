@@ -120,7 +120,8 @@ def test_write_nav_and_metrics(con) -> None:
     metrics = compute_metrics(con, "run-1")
     assert metrics["total_return"] == pytest.approx(0.0659)
     assert metrics["benchmark_total_return"] == pytest.approx(0.10)
-    assert metrics["excess_total_return"] == pytest.approx(-0.0341)
+    # 与 v_bt_nav_excess 一致：策略归一净值 / 基准归一净值 - 1。
+    assert metrics["excess_total_return"] == pytest.approx(1.0659 / 1.10 - 1.0)
     assert "information_ratio" in metrics
 
     run = con.execute(
@@ -153,6 +154,119 @@ def test_idempotent_write(con) -> None:
     assert rows[0][0] == 4
 
 
+def test_first_day_return_is_forced_to_zero(con, caplog) -> None:
+    """首日收益非 0 时置 0：nav 首日=1.0（旧行为是 1+r0）。"""
+    returns = _returns().with_columns(
+        pl.when(pl.int_range(pl.len()) == 0)
+        .then(0.10)
+        .otherwise(pl.col("ret_1d"))
+        .alias("ret_1d")
+    )
+    register_run(con, RunSpec(run_id="run-1", strategy_id="test"))
+    assert write_nav(con, "run-1", returns) == 4
+
+    rows = con.execute(
+        "SELECT ret_1d, nav, cum_ret FROM bt_nav "
+        "WHERE run_id = 'run-1' ORDER BY trade_date"
+    ).fetchall()
+    # 旧实现首行 nav=1.1；新契约首行 ret=0、nav=1.0，后续收益不变。
+    assert [row[0] for row in rows] == pytest.approx([0.0, 0.10, -0.05, 0.02])
+    assert [row[1] for row in rows] == pytest.approx([1.0, 1.1, 1.045, 1.0659])
+    assert rows[0][2] == pytest.approx(0.0)
+    assert "非 0" in caplog.text
+
+
+def test_short_window_rerun_removes_stale_tail(con) -> None:
+    """重跑缩短区间时按 run_id 先删后写，不残留旧 tail。"""
+    spec = RunSpec(
+        run_id="run-1",
+        strategy_id="test",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 5),
+    )
+    register_run(con, spec)
+    assert write_nav(con, "run-1", _returns()) == 4
+
+    short = _returns().head(2)
+    assert write_nav(con, "run-1", short) == 2
+
+    dates = [
+        row[0]
+        for row in con.execute(
+            "SELECT trade_date FROM bt_nav WHERE run_id = 'run-1' ORDER BY trade_date"
+        ).fetchall()
+    ]
+    assert dates == [date(2024, 1, 2), date(2024, 1, 3)]
+    assert (
+        con.execute("SELECT count(*) FROM bt_nav WHERE run_id = 'run-1'").fetchall()[0][
+            0
+        ]
+        == 2
+    )
+
+
+def test_register_run_resets_finished_at(con) -> None:
+    spec = RunSpec(run_id="run-1", strategy_id="test")
+    register_run(con, spec)
+    write_nav(con, "run-1", _returns())
+    compute_metrics(con, "run-1")
+    assert (
+        con.execute("SELECT status FROM bt_runs WHERE run_id = 'run-1'").fetchall()[0][
+            0
+        ]
+        == "success"
+    )
+
+    # 模拟上一轮 finished_at 非空
+    con.execute(
+        "UPDATE bt_runs SET finished_at = TIMESTAMPTZ '2000-01-01 00:00:00+00' "
+        "WHERE run_id = 'run-1'"
+    )
+    register_run(con, spec)
+    finished_at, status = con.execute(
+        "SELECT finished_at, status FROM bt_runs WHERE run_id = 'run-1'"
+    ).fetchall()[0]
+    assert finished_at is None
+    assert status == "running"
+
+
+def test_metrics_rerun_replaces_old_metrics(con) -> None:
+    """指标重算 = 删旧写新：不再出现的指标不被保留，computed_at 刷新。"""
+    _insert_baseline(con)
+    spec = RunSpec(
+        run_id="run-1",
+        strategy_id="test",
+        benchmark_id="BI_TEST",
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 5),
+    )
+    register_run(con, spec)
+    write_nav(con, "run-1", _returns(), benchmark_id="BI_TEST")
+    old = compute_metrics(con, "run-1")
+    assert old["total_return"] == pytest.approx(0.0659)
+    con.execute(
+        "UPDATE bt_run_metrics SET computed_at = "
+        "TIMESTAMPTZ '2000-01-01 00:00:00+00' WHERE run_id = 'run-1'"
+    )
+
+    write_nav(con, "run-1", _returns().head(2), benchmark_id="BI_TEST")
+    new = compute_metrics(con, "run-1")
+    assert new["total_return"] == pytest.approx(0.10)
+    stored = {
+        row[0]: row[1]
+        for row in con.execute(
+            "SELECT metric_name, metric_value FROM bt_run_metrics "
+            "WHERE run_id = 'run-1'"
+        ).fetchall()
+    }
+    assert stored["total_return"] == pytest.approx(0.10)
+    stale = con.execute(
+        "SELECT count(*) FROM bt_run_metrics "
+        "WHERE run_id = 'run-1' AND computed_at < TIMESTAMPTZ '2020-01-01 00:00:00+00'"
+    ).fetchall()[0][0]
+    assert stale == 0
+
+
 def test_metrics_helpers() -> None:
     assert total_return([0.1, -0.1]) == pytest.approx(-0.01)
     assert max_drawdown([1.0, 0.9, 1.2, 0.6]) == pytest.approx(0.6 / 1.2 - 1)
@@ -168,6 +282,6 @@ def test_summarize_with_benchmark() -> None:
     result = summarize(returns, navs, benchmark_returns=benchmark)
     assert result["total_return"] == pytest.approx(0.045)
     assert result["benchmark_total_return"] == pytest.approx(0.05)
-    assert result["excess_total_return"] == pytest.approx(-0.005)
+    assert result["excess_total_return"] == pytest.approx(1.045 / 1.05 - 1.0)
     assert result["beta"] == pytest.approx(2.5)
     assert result["tracking_error"] is not None

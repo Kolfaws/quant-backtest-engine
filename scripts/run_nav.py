@@ -9,6 +9,11 @@ CSV 格式（表头必需）：
     2024-01-02,0.0
     2024-01-03,0.0123
 
+首日契约：``bt_nav`` 首个交易日 ``nav`` 恒为 1.0、``ret_1d`` 恒为 0。
+CSV 首行收益非 0 时默认**拒绝执行**；显式加 ``--allow-nonzero-first-day``
+才由引擎置 0 并告警。重跑同一 ``--run-id`` 会整体替换旧 ``bt_nav`` /
+``bt_run_metrics``（登记、净值、指标三写同一事务），失败回滚保留旧数据。
+
 用法：
     python scripts/run_nav.py --run-id demo_eqw --strategy-id eqw_core \
         --returns outputs/demo_returns.csv --benchmark-id BI_HS300
@@ -31,6 +36,7 @@ from backtest_engine.core.db import (
 )
 from backtest_engine.core.execution import load_execution_config
 from backtest_engine.engine.nav import (
+    FIRST_RET_TOLERANCE,
     RunSpec,
     compute_metrics,
     mark_run_failed,
@@ -60,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-level", default="INFO", choices=("DEBUG", "INFO", "WARNING", "ERROR")
     )
+    parser.add_argument(
+        "--allow-nonzero-first-day",
+        action="store_true",
+        help="首行 ret_1d 非 0 时不报错，改为告警并由引擎置 0（首日 nav 仍为 1.0）",
+    )
     return parser
 
 
@@ -75,7 +86,30 @@ def _read_returns(path: Path) -> pl.DataFrame:
         .str.strptime(pl.Date, "%Y-%m-%d", strict=False),
         pl.col("ret_1d").cast(pl.Float64),
     )
-    return frame.drop_nulls(["trade_date", "ret_1d"]).sort("trade_date")
+    return (
+        frame.drop_nulls(["trade_date", "ret_1d"])
+        .unique(subset=["trade_date"], keep="last")
+        .sort("trade_date")
+    )
+
+
+def _enforce_first_day(returns: pl.DataFrame, *, allow_nonzero: bool) -> None:
+    """校验首行收益；默认拒绝非 0 首行，``allow_nonzero`` 时仅告警（由引擎置 0）。"""
+    if returns.is_empty():
+        raise ValueError("收益文件为空")
+    first_ret = float(returns["ret_1d"][0])
+    if abs(first_ret) <= FIRST_RET_TOLERANCE:
+        return
+    day = returns["trade_date"][0]
+    message = (
+        f"收益文件首日 {day} 的 ret_1d={first_ret:.10g} 非 0；"
+        "bt_nav 契约要求首日 ret_1d=0、nav=1.0。请把首行收益置 0，"
+        "或加 --allow-nonzero-first-day 由引擎置 0 并告警"
+    )
+    if allow_nonzero:
+        LOG.warning("%s；已按 --allow-nonzero-first-day 置 0", message)
+        return
+    raise ValueError(message)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -89,8 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         profile = load_profile(profile=args.profile)
         returns = _read_returns(args.returns)
-        if returns.is_empty():
-            raise ValueError("收益文件为空")
+        _enforce_first_day(returns, allow_nonzero=args.allow_nonzero_first_day)
         start = returns["trade_date"].min()
         end = returns["trade_date"].max()
         execution = (
@@ -115,12 +148,22 @@ def main(argv: list[str] | None = None) -> int:
 
         with backtest_connection(profile) as con:
             require_backtest_schema(con)
-            register_run(con, spec)
+            # 登记 + 写净值 + 算指标三写同事务：失败整体回滚，不留半批数据。
+            con.execute("BEGIN TRANSACTION")
             try:
+                register_run(con, spec)
                 write_nav(con, args.run_id, returns, benchmark_id=args.benchmark_id)
                 metrics = compute_metrics(con, args.run_id)
+                con.execute("COMMIT")
             except Exception as exc:
-                mark_run_failed(con, args.run_id, str(exc))
+                try:
+                    con.execute("ROLLBACK")
+                except Exception:
+                    LOG.debug("回滚失败（事务可能已结束）", exc_info=True)
+                try:
+                    mark_run_failed(con, args.run_id, str(exc), spec=spec)
+                except Exception:
+                    LOG.exception("记录 failed 状态失败 run_id=%s", args.run_id)
                 raise
             LOG.info("完成 run_id=%s metrics=%s", args.run_id, sorted(metrics))
     except Exception as exc:  # noqa: BLE001 - CLI 顶层

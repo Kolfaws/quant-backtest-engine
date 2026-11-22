@@ -202,13 +202,22 @@ def summarize(
     strategy_series = aligned["strategy"]
     benchmark_series = aligned["benchmark"]
     active_series = aligned["active"]
+    strategy_total = total_return(strategy_series) or 0.0
+    benchmark_total = total_return(benchmark_series) or 0.0
+    # 与 v_bt_nav_excess / analytics 的统一口径：超额 = 策略归一净值 / 基准归一净值 - 1。
+    # 不用“策略总收益 - 基准总收益”，否则会漏掉复利交叉项。
+    if 1.0 + benchmark_total <= 0 or 1.0 + strategy_total <= 0:
+        excess_total: float | None = None
+        excess_annualized: float | None = None
+    else:
+        excess_gross = (1.0 + strategy_total) / (1.0 + benchmark_total)
+        excess_total = excess_gross - 1.0
+        excess_annualized = excess_gross ** (TRADING_DAYS / aligned.height) - 1.0
     metrics.update(
         {
-            "benchmark_total_return": total_return(benchmark_series),
-            "excess_total_return": (total_return(strategy_series) or 0.0)
-            - (total_return(benchmark_series) or 0.0),
-            "excess_annualized_return": (annualized_return(strategy_series) or 0.0)
-            - (annualized_return(benchmark_series) or 0.0),
+            "benchmark_total_return": benchmark_total,
+            "excess_total_return": excess_total,
+            "excess_annualized_return": excess_annualized,
             "tracking_error": tracking_error(active_series),
             "information_ratio": information_ratio(active_series),
             "beta": beta(strategy_series, benchmark_series),

@@ -11,9 +11,13 @@
 ## 1. 设计约定
 
 - 表前缀 `bt_`：回测评价领域；`meta_`：版本/批次元数据。
-- 主键必须显式声明；所有写入走 `INSERT ... ON CONFLICT (...) DO UPDATE`。
+- 主键必须显式声明；基准四表与 `bt_runs` 登记走
+  `INSERT ... ON CONFLICT (...) DO UPDATE`；`bt_nav / bt_run_metrics` 重跑先删后写。
 - 日期用 `DATE`；时间戳用 `TIMESTAMPTZ`；净值/收益用 `DOUBLE`。
-- `bt_nav.nav`、`bt_baselines.nav` 都是**归一净值**（起点为 1.0）。
+- `bt_nav.nav`、`bt_baselines.nav` 都是**归一净值**（起点为 1.0）；`bt_nav`
+  首个交易日恒为 `ret_1d=0`、`nav=1.0`，非 0 首行在写入层被拒绝或置 0。
+- 回测侧三表（`bt_runs / bt_nav / bt_run_metrics`）重跑时按 `run_id` **先删后写**，
+  避免缩短区间残留旧 tail；写入方负责把同一次 run 的三写包在单事务内。
 - 基准与回测的**生命周期分离**：基准可被多个 run 复用，不随 run 删除。
 
 ## 2. 表清单
@@ -57,7 +61,7 @@
 | `engine_version` | `VARCHAR` | 引擎版本 |
 | `config_hash` | `VARCHAR` | 配置哈希（可空） |
 | `created_at` | `TIMESTAMPTZ` | 默认 now() |
-| `finished_at` | `TIMESTAMPTZ` | 结束时间 |
+| `finished_at` | `TIMESTAMPTZ` | 结束时间；登记/重跑时重置为 NULL |
 
 ### 3.3 `bt_nav` — 策略净值
 
@@ -72,7 +76,14 @@
 | `benchmark_id` | `VARCHAR` | 基准代码；用于 `v_bt_nav_excess` |
 | `created_at` | `TIMESTAMPTZ` | 默认 now() |
 
-**主键**：`(run_id, trade_date)`。重跑同一 run 会覆盖，不产生重复行。
+**主键**：`(run_id, trade_date)`。
+
+**首日契约**：首个交易日 `ret_1d=0`、`nav=1.0`（与 demo / `v_bt_nav_excess` 对齐）；
+输入首行收益非 0 时 `run_nav.py` 默认拒绝，`--allow-nonzero-first-day` 才由引擎置 0
+并告警，该首行收益不计入净值。
+
+**重跑**：按 `run_id` 删除旧净值行后再写本批，缩短区间不残留旧 tail；
+`created_at` 刷新为本次写入时间（不再保留首次写入时间）。
 
 ### 3.4 `bt_run_metrics` — 绩效指标
 
@@ -81,7 +92,10 @@
 | `run_id` | `VARCHAR` | 关联 `bt_runs` |
 | `metric_name` | `VARCHAR` | 指标名（见下表） |
 | `metric_value` | `DOUBLE` | 指标值（可为 NULL） |
-| `computed_at` | `TIMESTAMPTZ` | 计算时间 |
+| `computed_at` | `TIMESTAMPTZ` | 计算时间；重算时先删旧指标再插入，此列刷新 |
+
+重算语义：同一 `run_id` 的旧指标行整体删除后重写，不再出现的指标名不保留，
+因此缩短区间重跑不会残留旧指标。
 
 当前写入的指标：
 
@@ -89,6 +103,9 @@
 `max_drawdown`、`calmar_ratio`、`win_rate`，以及有基准时的
 `benchmark_total_return`、`excess_total_return`、`excess_annualized_return`、
 `tracking_error`、`information_ratio`、`beta`。
+
+`excess_total_return` 统一为“策略归一净值 / 基准归一净值 - 1”，与
+`v_bt_nav_excess.excess_nav` 同口径；旧 run 的已存指标不会自动重算。
 
 ### 3.5 `bt_benchmarks` — 基准定义
 
@@ -192,6 +209,8 @@ ORDER BY trade_date;
 ```
 
 这样即使回测起点与基准 `base_date` 不同，超额也不会错位。
+首日 `nav=1.0` 时 `benchmark_nav_rel` 与 `excess_nav` 的首日值恒为 1.0；
+旧 run（首日 `nav=1+r0`）与按新契约重跑的 run 的超额起点不可直接比较。
 
 ## 5. 写入与幂等
 
@@ -199,12 +218,35 @@ ORDER BY trade_date;
 | --- | --- |
 | 基准点位重复计算 | `ON CONFLICT (benchmark_id, trade_date) DO UPDATE`，`created_at` 保留首次 |
 | 权重重复计算 | `ON CONFLICT (benchmark_id, trade_date, symbol) DO UPDATE` |
-| 净值重跑 | `ON CONFLICT (run_id, trade_date) DO UPDATE` |
-| 指标重算 | `ON CONFLICT (run_id, metric_name) DO UPDATE` |
+| 净值重跑 | 先 `DELETE ... WHERE run_id` 再 `INSERT`（同一事务；首日 `nav=1.0`） |
+| 指标重算 | 先 `DELETE ... WHERE run_id` 再 `INSERT`，`computed_at` 刷新 |
 | 批次日志 | `ON CONFLICT (run_id) DO UPDATE` |
 
 批大小由 quant-baseline 的 `sink.batch_size` 控制；每批一个事务，失败回滚。
 写后可选做全表主键唯一性检查（`verify_after_write`）。
+
+### 5.1 回测写入事务（`run_nav.py` / `demo_run.py`）
+
+登记 `bt_runs`、写 `bt_nav`、算 `bt_run_metrics` 三写在同一事务：
+
+- 失败回滚，上一轮已提交的净值/指标保留，不会被半批数据覆盖；
+- 回滚后再写一条 `failed` 记录（`finished_at` 刷新），供重跑排查。
+
+`write_nav` / `compute_metrics` 只负责“先删后写”，事务边界由调用方控制；
+直接调用这两个 API 的场景需自行包事务。
+
+### 5.2 Promotion（`promote_test_run.py`）
+
+发布范围仅 `bt_runs / bt_nav / bt_run_metrics` 三张表；基准四表
+（`bt_benchmarks / bt_baselines / bt_baseline_weights / bt_compute_log`）由
+quant-baseline 发布，promotion **不读写** `bt_compute_log`。
+
+- 默认 dry-run：只读打开正式库，只校验和预览行数，不取写锁；
+- `--apply`：单事务内替换该 run 的三表记录；
+- 校验：test run 为 `success`；benchmark 非空且正式库 `bt_benchmarks` 有定义；
+  正式库 `bt_baselines` 覆盖 run 的每个净值交易日；test/prod 两库 backtest
+  schema 版本 == `BACKTEST_SCHEMA_VERSION` 且三表列名与
+  `BACKTEST_TABLE_COLUMNS` 一致。
 
 ## 6. 版本与迁移
 

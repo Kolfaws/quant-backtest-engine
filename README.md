@@ -1,12 +1,7 @@
 # quant-backtest-engine
 
-## Overview
-
-Quant Backtest Engine is the owner of backtest.duckdb and the NAV/metrics writer for the Quant stack.
-It ingests a daily returns CSV, records runs and performance metrics, and exposes benchmark-relative results for analytics.
-It does not fetch market data, build benchmarks, or perform order-level trade simulation.
-
-回测库（`backtest.duckdb`）的**建表方**与净值/绩效计算组件。
+回测库（`backtest.duckdb`）的**建表方**与净值/绩效计算组件；不做行情抓取、基准构建
+或订单级撮合。
 
 - 项目/文件夹：`quant-backtest-engine`
 - Python 包名：`backtest_engine`
@@ -15,7 +10,7 @@ It does not fetch market data, build benchmarks, or perform order-level trade si
 ## 1. 定位
 
 ```text
-market.duckdb      ← quant-data-pipeline 写基础行情 / factor_research 写因子
+market.duckdb      ← quant-data-pipeline 写基础行情 / quant-factor 写因子
 backtest.duckdb    ← 本项目建表；quant-baseline 写基准；本项目写净值
 ```
 
@@ -24,7 +19,7 @@ backtest.duckdb    ← 本项目建表；quant-baseline 写基准；本项目写
 - **只由本项目建 `backtest.duckdb` 的表**：`scripts/init_backtest_db.py`，DDL 来自 `quant_schema.backtest_ddl`（`quant-db-schema` 项目）。
 - **`quant-baseline` 不建表**，只 upsert `bt_benchmarks / bt_baselines / bt_baseline_weights / bt_compute_log`。
 - **本项目不建 `market.duckdb` 的表**，读取时使用 `read_only=True`，或 `ATTACH ... (READ_ONLY)` 跨库计算。
-- 超额收益在 SQL 视图 `v_bt_nav_excess` 里算，不把基准序列搬到 Python。
+- 超额视图 `v_bt_nav_excess` 供 analytics；engine 计算指标时会读取基准收益，但口径与视图一致（归一净值比 -1）。
 
 ## 2. 目录
 
@@ -58,8 +53,7 @@ cp .env.example .env
 # 依赖（示例；按自己的项目布局调整相对路径）
 uv add --editable ../quant-db-schema
 uv add --editable ../quant-data-pipeline
-uv add --editable ../quant-baseline
-uv add duckdb polars pyarrow pytz pyyaml numpy scipy
+uv add duckdb polars pyarrow pytz pyyaml numpy
 uv sync
 
 # 1) 建表（幂等；会写入 component='backtest' 的版本行）
@@ -80,6 +74,15 @@ uv run python scripts/run_nav.py --run-id my_run --strategy-id mom `
 `--execution-config` 会把配置校验后的摘要写入 `bt_runs.cost_model`；
 `run_nav.py` 仍是“收益 -> 净值”模式，不会凭空生成成交价或成交记录。
 
+### 首日与重跑契约
+
+- `bt_nav` **首个交易日**恒为 `ret_1d=0`、`nav=1.0`（与 DDL、`demo_run.py`、
+  `v_bt_nav_excess` 一致）。CSV 首行收益非 0 时 `run_nav.py` **默认拒绝执行**；
+  显式加 `--allow-nonzero-first-day` 才由引擎置 0 并告警，首行收益**不计入**净值。
+- 重跑同一 `run_id` 时按 `run_id` 先删后写 `bt_nav` / `bt_run_metrics`：缩短区间
+  不残留旧 tail，`finished_at` / `computed_at` 重置。登记、净值、指标三写在同一
+  事务内，失败回滚并标记 `failed`（上一轮已提交的数据保留）。
+
 ### 测试库
 
 ```bash
@@ -96,6 +99,12 @@ uv run python scripts/promote_test_run.py --run-id demo_test --apply
 ```
 
 测试库路径来自 `BACKTEST_TEST_DB_PATH`；正式库与测试库路径不能相同。
+
+`promote_test_run.py` 默认 dry-run 用**只读**连接打开正式库，只做校验与行数预览，
+不取写锁；`--apply` 才在单事务内替换该 run 的 `bt_runs / bt_nav / bt_run_metrics`。
+发布前会校验：test run 为 `success`；benchmark 非空且正式库有定义；正式库
+`bt_baselines` 覆盖 run 的每个净值交易日；test/prod 两库 backtest schema 版本与
+三表列名一致。基准四表（含 `bt_compute_log`）归 quant-baseline，本脚本不再读写。
 
 `run_nav.py` 的 CSV 至少包含：
 
@@ -114,9 +123,9 @@ trade_date,ret_1d
 | 表 | 写入方 | 主键 | 用途 |
 | --- | --- | --- | --- |
 | `meta_schema_version` | 本项目 init | `component` | 独立的 `backtest` 版本行 |
-| `bt_runs` | 本项目 | `run_id` | 策略配置、状态、参数快照 |
-| `bt_nav` | 本项目 | `(run_id, trade_date)` | 策略日频净值/回撤 |
-| `bt_run_metrics` | 本项目 | `(run_id, metric_name)` | 绩效指标 |
+| `bt_runs` | 本项目 | `run_id` | 策略配置、状态、参数快照（重跑重置 `finished_at`） |
+| `bt_nav` | 本项目 | `(run_id, trade_date)` | 策略日频净值/回撤；首日 `nav=1.0`，重跑按 `run_id` 整体替换 |
+| `bt_run_metrics` | 本项目 | `(run_id, metric_name)` | 绩效指标；重算整体替换并刷新 `computed_at` |
 | `bt_benchmarks` | quant-baseline | `benchmark_id` | 基准定义物化副本 |
 | `bt_baselines` | quant-baseline | `(benchmark_id, trade_date)` | 基准点位/净值 |
 | `bt_baseline_weights` | quant-baseline | `(benchmark_id, trade_date, symbol)` | 合成基准权重 |
@@ -129,7 +138,7 @@ trade_date,ret_1d
 
 DuckDB 是单写多读：
 
-- `market.duckdb`：quant-data-pipeline / factor_research 持 RW 写；本项目**只读**打开，可以并发。
+- `market.duckdb`：quant-data-pipeline / quant-factor 持 RW 写；本项目**只读**打开，可以并发。
 - `backtest.duckdb`：同一时刻只允许一个 RW 连接；`init` 与写净值要串行。
 - 跨库计算示例（backtest 连接内）：
 

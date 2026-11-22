@@ -3,7 +3,9 @@
 写入约定：
 
 * ``bt_nav`` 是**唯一**由 backtest_engine 写的行情型表，主键 ``(run_id, trade_date)``；
-* ``nav`` 为策略归一净值（首个交易日通常为 1.0）；
+* ``nav`` 为策略归一净值，**首个交易日恒为 1.0**（首行 ``ret_1d`` 恒为 0）；
+  非 0 首行会被置 0 并告警，与 DDL/demo/``v_bt_nav_excess`` 的口径一致；
+* 重跑同一 ``run_id`` 时先按 ``run_id`` 删除旧行再写入，缩短区间不会残留旧 tail；
 * 超额计算在 ``v_bt_nav_excess`` 视图里，本模块只负责把指标物化到
   ``bt_run_metrics``。
 """
@@ -30,6 +32,9 @@ from .metrics import summarize
 LOG = logging.getLogger("backtest_engine.nav")
 
 ENGINE_VERSION: Final[str] = "0.1.0"
+
+#: 首行 ``ret_1d`` 允许误差；超过即视为“首日收益非 0”，会被置 0 并告警。
+FIRST_RET_TOLERANCE: Final[float] = 1e-9
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,9 +88,9 @@ def _upsert(con, table: str, frame: pl.DataFrame, keys: tuple[str, ...]) -> int:
     return frame.height
 
 
-def register_run(con, spec: RunSpec) -> None:
-    """登记/重置一次回测（幂等：同一 run_id 覆盖配置并置为 running）。"""
-    frame = pl.DataFrame(
+def _run_frame(spec: RunSpec, *, status: str) -> pl.DataFrame:
+    """构造 ``bt_runs`` 的一行；``created_at`` / ``finished_at`` 交给 DDL 与更新语句。"""
+    return pl.DataFrame(
         {
             "run_id": [spec.run_id],
             "strategy_id": [spec.strategy_id],
@@ -96,12 +101,19 @@ def register_run(con, spec: RunSpec) -> None:
             "end_date": [spec.end_date],
             "initial_capital": [float(spec.initial_capital)],
             "cost_model": [spec.cost_model],
-            "status": ["running"],
+            "status": [status],
             "engine_version": [spec.engine_version],
             "config_hash": [spec.config_hash],
         }
     )
-    _upsert(con, BT_RUNS, frame, BT_RUNS_KEYS)
+
+
+def register_run(con, spec: RunSpec) -> None:
+    """登记/重置一次回测（幂等：覆盖配置、置为 running、清空 finished_at）。"""
+    _upsert(con, BT_RUNS, _run_frame(spec, status="running"), BT_RUNS_KEYS)
+    con.execute(
+        f'UPDATE "{BT_RUNS}" SET finished_at = NULL WHERE run_id = ?', [spec.run_id]
+    )
     LOG.info("登记回测 run_id=%s strategy=%s", spec.run_id, spec.strategy_id)
 
 
@@ -112,10 +124,17 @@ def write_nav(
     *,
     benchmark_id: str | None = None,
 ) -> int:
-    """把日收益序列转成净值并幂等写入 ``bt_nav``。
+    """把日收益序列转成净值并**整体替换**该 run 的 ``bt_nav``。
+
+    契约（与 DDL / ``demo_run`` / ``docs/db_schema.md`` 一致）：
+
+    * 首个交易日的 ``ret_1d`` 恒为 0、``nav`` 恒为 1.0；输入首行非 0 时置 0 并告警；
+    * 重跑同一 ``run_id`` 时先删除该 run 的旧净值行再写入，缩短区间不会残留旧 tail；
+    * 空输入直接返回 0，不修改旧行（调用方应先校验收益文件非空）；
+    * 本函数自身不 ``BEGIN``；调用方若要求“登记 + 净值 + 指标”原子化，需包事务。
 
     Args:
-        returns: 至少包含 ``trade_date``、``ret_1d`` 两列；首行收益通常为 0。
+        returns: 至少包含 ``trade_date``、``ret_1d`` 两列；首行收益会被置 0。
         benchmark_id: 基准代码；为空时从 returns 的同名列读取。
 
     Returns:
@@ -141,7 +160,25 @@ def write_nav(
         .sort("trade_date")
     )
     if frame.is_empty():
+        LOG.warning("收益序列为空，跳过写入 run_id=%s（保留旧行）", run_id)
         return 0
+
+    first_date = frame["trade_date"][0]
+    first_ret = float(frame["ret_1d"][0])
+    if abs(first_ret) > FIRST_RET_TOLERANCE:
+        LOG.warning(
+            "run_id=%s 首日 %s 的 ret_1d=%.10g 非 0；按契约置 0（首日 nav=1.0）",
+            run_id,
+            first_date,
+            first_ret,
+        )
+    frame = frame.with_columns(
+        pl.when(pl.int_range(pl.len()) == 0)
+        .then(0.0)
+        .otherwise(pl.col("ret_1d"))
+        .cast(pl.Float64)
+        .alias("ret_1d")
+    )
 
     frame = (
         frame.with_columns((1.0 + pl.col("ret_1d")).cum_prod().alias("nav"))
@@ -158,6 +195,7 @@ def write_nav(
             "benchmark_id",
         )
     )
+    con.execute(f'DELETE FROM "{BT_NAV}" WHERE run_id = ?', [run_id])
     rows = _upsert(con, BT_NAV, frame, BT_NAV_KEYS)
     LOG.info("写入净值 run_id=%s rows=%d", run_id, rows)
     return rows
@@ -220,14 +258,17 @@ def compute_metrics(con, run_id: str) -> dict[str, float]:
     metrics = summarize(rets, navs, benchmark_returns=benchmark_returns)
     metrics = {name: value for name, value in metrics.items() if value is not None}
 
-    frame = pl.DataFrame(
-        {
-            "run_id": [run_id] * len(metrics),
-            "metric_name": list(metrics),
-            "metric_value": [float(value) for value in metrics.values()],
-        }
-    )
-    _upsert(con, BT_RUN_METRICS, frame, BT_RUN_METRICS_KEYS)
+    # 重算 = 整体替换：删除旧指标再写入，computed_at 由 DDL 默认值刷新。
+    con.execute(f'DELETE FROM "{BT_RUN_METRICS}" WHERE run_id = ?', [run_id])
+    if metrics:
+        frame = pl.DataFrame(
+            {
+                "run_id": [run_id] * len(metrics),
+                "metric_name": list(metrics),
+                "metric_value": [float(value) for value in metrics.values()],
+            }
+        )
+        _upsert(con, BT_RUN_METRICS, frame, BT_RUN_METRICS_KEYS)
 
     con.execute(
         "UPDATE bt_runs SET status = 'success', finished_at = ? WHERE run_id = ?",
@@ -237,16 +278,35 @@ def compute_metrics(con, run_id: str) -> dict[str, float]:
     return metrics
 
 
-def mark_run_failed(con, run_id: str, error: str) -> None:
-    """把回测标记为 failed；异常摘要只进日志，不污染配置字段。"""
-    con.execute(
-        "UPDATE bt_runs SET status = 'failed', finished_at = ? WHERE run_id = ?",
-        [datetime.now(UTC), run_id],
-    )
+def mark_run_failed(
+    con, run_id: str, error: str, *, spec: RunSpec | None = None
+) -> None:
+    """把回测标记为 failed；异常摘要只进日志，不污染配置字段。
+
+    ``spec`` 用于“首次运行、``bt_runs`` 行尚未提交”的场景（例如 run_nav 的
+    三写事务回滚之后）：行不存在时补写一条 ``failed`` 记录，便于排查与重跑。
+    """
+    exists = con.execute(
+        f'SELECT 1 FROM "{BT_RUNS}" WHERE run_id = ?', [run_id]
+    ).fetchall()
+    if exists:
+        con.execute(
+            f'UPDATE "{BT_RUNS}" SET status = ?, finished_at = ? WHERE run_id = ?',
+            ["failed", datetime.now(UTC), run_id],
+        )
+    elif spec is not None:
+        _upsert(con, BT_RUNS, _run_frame(spec, status="failed"), BT_RUNS_KEYS)
+        con.execute(
+            f'UPDATE "{BT_RUNS}" SET finished_at = ? WHERE run_id = ?',
+            [datetime.now(UTC), run_id],
+        )
+    else:
+        LOG.error("run_id=%s 在 bt_runs 中不存在，无法标记 failed", run_id)
     LOG.error("回测失败 run_id=%s error=%s", run_id, error)
 
 
 __all__ = [
+    "FIRST_RET_TOLERANCE",
     "RunSpec",
     "compute_metrics",
     "mark_run_failed",
